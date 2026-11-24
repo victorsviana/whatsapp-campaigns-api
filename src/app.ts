@@ -1,5 +1,6 @@
 import express, { type Express } from 'express';
 import { env } from './shared/config/env';
+import { errorHandler, notFoundHandler } from './shared/errors/error-handler';
 
 export function createApp(): Express {
   const app = express();
@@ -10,6 +11,9 @@ export function createApp(): Express {
   app.get('/health', (_req, res) => {
     res.status(200).json({ status: 'ok' });
   });
+
+  app.use(notFoundHandler);
+  app.use(errorHandler);
 
   return app;
 }
