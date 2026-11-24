@@ -12,3 +12,15 @@ export const createCampaignBodySchema = z.object({
 });
 
 export type CreateCampaignInput = z.infer<typeof createCampaignBodySchema>;
+
+export const CONTACTS_PER_REQUEST_MAX = 10_000;
+
+export const campaignIdParamsSchema = z.object({
+  id: z.uuid(),
+});
+
+export const addContactsBodySchema = z.object({
+  contacts: z.array(z.record(z.string(), z.unknown())).min(1).max(CONTACTS_PER_REQUEST_MAX),
+});
+
+export type AddContactsInput = z.infer<typeof addContactsBodySchema>;
