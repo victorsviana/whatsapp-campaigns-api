@@ -73,3 +73,28 @@ export const messages = pgTable(
 
 export type Message = typeof messages.$inferSelect;
 export type NewMessage = typeof messages.$inferInsert;
+
+export const PROVIDER_EVENT_STATUSES = ['delivered', 'read', 'failed'] as const;
+export type ProviderEventStatus = (typeof PROVIDER_EVENT_STATUSES)[number];
+
+export const PROVIDER_EVENT_RESULTS = ['applied', 'ignored', 'pending'] as const;
+export type ProviderEventResult = (typeof PROVIDER_EVENT_RESULTS)[number];
+
+export const providerEventStatusEnum = pgEnum('provider_event_status', PROVIDER_EVENT_STATUSES);
+export const providerEventResultEnum = pgEnum('provider_event_result', PROVIDER_EVENT_RESULTS);
+
+export const providerEvents = pgTable(
+  'provider_events',
+  {
+    eventId: varchar('event_id', { length: 255 }).primaryKey(),
+    providerMessageId: varchar('provider_message_id', { length: 255 }).notNull(),
+    status: providerEventStatusEnum('status').notNull(),
+    result: providerEventResultEnum('result').notNull().default('pending'),
+    receivedAt: timestamp('received_at', { withTimezone: true }).notNull().defaultNow(),
+    processedAt: timestamp('processed_at', { withTimezone: true }),
+  },
+  (table) => [index('provider_events_provider_message_id_idx').on(table.providerMessageId)],
+);
+
+export type ProviderEvent = typeof providerEvents.$inferSelect;
+export type NewProviderEvent = typeof providerEvents.$inferInsert;
