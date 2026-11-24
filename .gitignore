@@ -1,0 +1,17 @@
+# Dependências e build
+node_modules/
+dist/
+
+# Variáveis de ambiente (segredos); o .env.example é versionado
+.env
+
+# Material do enunciado (não faz parte da entrega)
+teste/
+
+# Logs e cobertura
+*.log
+coverage/
+
+# SO / editor
+.DS_Store
+.vscode/
