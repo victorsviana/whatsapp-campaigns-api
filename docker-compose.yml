@@ -15,16 +15,27 @@ services:
       timeout: 5s
       retries: 15
 
+  migrate:
+    build: .
+    image: whatsapp-campaigns-api
+    command: ["node", "dist/database/migrate.js"]
+    environment:
+      DATABASE_URL: postgres://postgres:postgres@postgres:5432/wpp_campaigns
+    depends_on:
+      postgres:
+        condition: service_healthy
+
   api:
     build: .
+    image: whatsapp-campaigns-api
     environment:
       PORT: 3000
       DATABASE_URL: postgres://postgres:postgres@postgres:5432/wpp_campaigns
     ports:
       - "3000:3000"
     depends_on:
-      postgres:
-        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:3000/health"]
       interval: 5s
