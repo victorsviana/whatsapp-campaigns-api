@@ -1,4 +1,5 @@
 import { createApp } from './app';
+import { closeDatabase } from './database/client';
 import { env } from './shared/config/env';
 
 const app = createApp();
@@ -9,7 +10,8 @@ const server = app.listen(env.PORT, () => {
 
 function shutdown(signal: NodeJS.Signals): void {
   console.log(`${signal} recebido, encerrando a API`);
-  server.close((error) => {
+  server.close(async (error) => {
+    await closeDatabase();
     if (error) {
       console.error(error);
       process.exit(1);
