@@ -1,5 +1,5 @@
 import type { ProviderEventResult } from '../../database/schema';
-import { canTransition } from '../messages/message-status';
+import { applyEvent } from './apply-events';
 import type { WebhooksRepository } from './webhooks.repository';
 import type { ProviderEventInput } from './webhooks.schemas';
 
@@ -11,6 +11,8 @@ export function createWebhooksService(repository: WebhooksRepository) {
   return {
     receiveEvent(input: ProviderEventInput): Promise<WebhookResult> {
       return repository.transaction(async (tx) => {
+        await tx.lockProviderMessage(input.provider_message_id);
+
         const inserted = await tx.insertEvent({
           eventId: input.event_id,
           providerMessageId: input.provider_message_id,
@@ -25,10 +27,7 @@ export function createWebhooksService(repository: WebhooksRepository) {
           return 'pending';
         }
 
-        const applied = canTransition(message.status, input.status) && (await tx.applyEventStatus(message.id, input.status));
-        const result = applied ? 'applied' : 'ignored';
-        await tx.markEventProcessed(input.event_id, result);
-        return result;
+        return applyEvent(tx, message, { eventId: input.event_id, status: input.status });
       });
     },
   };

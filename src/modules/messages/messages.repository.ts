@@ -1,6 +1,8 @@
 import { and, eq, sql } from 'drizzle-orm';
 import type { DatabaseExecutor } from '../../database/client';
 import { messages } from '../../database/schema';
+import { applyPendingEvents } from '../webhooks/apply-events';
+import { createWebhooksRepository } from '../webhooks/webhooks.repository';
 
 export const MAX_ATTEMPTS_EXCEEDED = 'max_attempts_exceeded';
 
@@ -77,13 +79,23 @@ export function createMessagesRepository(db: DatabaseExecutor): MessagesReposito
       }));
     },
 
-    async markSent(id: string, providerMessageId: string): Promise<boolean> {
-      const updated = await db
-        .update(messages)
-        .set({ status: 'sent', providerMessageId, sentAt: sql`now()`, lockedAt: null })
-        .where(isSending(id))
-        .returning({ id: messages.id });
-      return updated.length > 0;
+    markSent(id: string, providerMessageId: string): Promise<boolean> {
+      return db.transaction(async (tx) => {
+        const webhooks = createWebhooksRepository(tx);
+        await webhooks.lockProviderMessage(providerMessageId);
+
+        const updated = await tx
+          .update(messages)
+          .set({ status: 'sent', providerMessageId, sentAt: sql`now()`, lockedAt: null })
+          .where(isSending(id))
+          .returning({ id: messages.id });
+        if (updated.length === 0) {
+          return false;
+        }
+
+        await applyPendingEvents(webhooks, providerMessageId, { id, status: 'sent' });
+        return true;
+      });
     },
 
     async markFailed(id: string, failureReason: string, lastError?: string): Promise<boolean> {

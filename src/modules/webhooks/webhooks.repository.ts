@@ -17,9 +17,16 @@ export type MessageForEvent = {
   status: MessageStatus;
 };
 
+export type PendingEvent = {
+  eventId: string;
+  status: ProviderEventStatus;
+};
+
 export interface WebhooksRepository {
   transaction<T>(work: (repository: WebhooksRepository) => Promise<T>): Promise<T>;
+  lockProviderMessage(providerMessageId: string): Promise<void>;
   insertEvent(event: NewProviderEvent): Promise<boolean>;
+  findPendingEvents(providerMessageId: string): Promise<PendingEvent[]>;
   findMessageForUpdate(providerMessageId: string): Promise<MessageForEvent | undefined>;
   applyEventStatus(messageId: string, status: ProviderEventStatus): Promise<boolean>;
   markEventProcessed(eventId: string, result: Exclude<ProviderEventResult, 'pending'>): Promise<void>;
@@ -29,6 +36,18 @@ export function createWebhooksRepository(db: DatabaseExecutor): WebhooksReposito
   return {
     transaction<T>(work: (repository: WebhooksRepository) => Promise<T>): Promise<T> {
       return db.transaction((tx) => work(createWebhooksRepository(tx)));
+    },
+
+    async lockProviderMessage(providerMessageId: string): Promise<void> {
+      await db.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${providerMessageId}, 0))`);
+    },
+
+    async findPendingEvents(providerMessageId: string): Promise<PendingEvent[]> {
+      return db
+        .select({ eventId: providerEvents.eventId, status: providerEvents.status })
+        .from(providerEvents)
+        .where(and(eq(providerEvents.providerMessageId, providerMessageId), eq(providerEvents.result, 'pending')))
+        .orderBy(providerEvents.receivedAt, providerEvents.eventId);
     },
 
     async insertEvent(event: NewProviderEvent): Promise<boolean> {
