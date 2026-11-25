@@ -2,6 +2,8 @@ import { and, eq, sql } from 'drizzle-orm';
 import type { DatabaseExecutor } from '../../database/client';
 import { messages } from '../../database/schema';
 
+export const MAX_ATTEMPTS_EXCEEDED = 'max_attempts_exceeded';
+
 export type ClaimedMessage = {
   id: string;
   campaignId: string;
@@ -27,6 +29,7 @@ export interface MessagesRepository {
   markSent(id: string, providerMessageId: string): Promise<boolean>;
   markFailed(id: string, failureReason: string, lastError?: string): Promise<boolean>;
   scheduleRetry(id: string, delayMs: number, lastError: string): Promise<boolean>;
+  recoverStuck(sendingTimeoutMs: number, maxAttempts: number): Promise<number>;
 }
 
 function isSending(id: string) {
@@ -104,6 +107,20 @@ export function createMessagesRepository(db: DatabaseExecutor): MessagesReposito
         .where(isSending(id))
         .returning({ id: messages.id });
       return updated.length > 0;
+    },
+
+    async recoverStuck(sendingTimeoutMs: number, maxAttempts: number): Promise<number> {
+      const result = await db.execute(sql`
+        UPDATE messages
+        SET status = (CASE WHEN attempts >= ${maxAttempts} THEN 'failed' ELSE 'pending' END)::message_status,
+            failure_reason = CASE WHEN attempts >= ${maxAttempts} THEN ${MAX_ATTEMPTS_EXCEEDED} ELSE failure_reason END,
+            next_attempt_at = CASE WHEN attempts >= ${maxAttempts} THEN next_attempt_at ELSE now() END,
+            locked_at = NULL,
+            updated_at = now()
+        WHERE status = 'sending'
+          AND locked_at < now() - ${sendingTimeoutMs} * interval '1 millisecond'
+      `);
+      return result.rowCount ?? 0;
     },
   };
 }

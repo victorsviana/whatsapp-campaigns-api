@@ -1,9 +1,8 @@
 import { type MessagingProvider, ProviderError } from '../../integrations/messaging/messaging-provider';
 import { renderTemplate } from '../campaigns/template';
-import type { ClaimedMessage, MessagesRepository } from './messages.repository';
+import { type ClaimedMessage, MAX_ATTEMPTS_EXCEEDED, type MessagesRepository } from './messages.repository';
 import type { RetryPolicy } from './retry-policy';
 
-export const MAX_ATTEMPTS_EXCEEDED = 'max_attempts_exceeded';
 const FAILURE_REASON_MAX_LENGTH = 100;
 
 export type ProcessResult = 'sent' | 'failed' | 'retry';
