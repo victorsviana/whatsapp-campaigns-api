@@ -1,5 +1,6 @@
-import { sql } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import type { DatabaseExecutor } from '../../database/client';
+import { messages } from '../../database/schema';
 
 export type ClaimedMessage = {
   id: string;
@@ -23,6 +24,13 @@ type ClaimedMessageRow = {
 
 export interface MessagesRepository {
   claimBatch(limit: number): Promise<ClaimedMessage[]>;
+  markSent(id: string, providerMessageId: string): Promise<boolean>;
+  markFailed(id: string, failureReason: string, lastError?: string): Promise<boolean>;
+  scheduleRetry(id: string, delayMs: number, lastError: string): Promise<boolean>;
+}
+
+function isSending(id: string) {
+  return and(eq(messages.id, id), eq(messages.status, 'sending'));
 }
 
 function compareClaimOrder(a: ClaimedMessageRow, b: ClaimedMessageRow): number {
@@ -64,6 +72,38 @@ export function createMessagesRepository(db: DatabaseExecutor): MessagesReposito
         attempts: row.attempts,
         template: row.template,
       }));
+    },
+
+    async markSent(id: string, providerMessageId: string): Promise<boolean> {
+      const updated = await db
+        .update(messages)
+        .set({ status: 'sent', providerMessageId, sentAt: sql`now()`, lockedAt: null })
+        .where(isSending(id))
+        .returning({ id: messages.id });
+      return updated.length > 0;
+    },
+
+    async markFailed(id: string, failureReason: string, lastError?: string): Promise<boolean> {
+      const updated = await db
+        .update(messages)
+        .set({ status: 'failed', failureReason, lockedAt: null, ...(lastError === undefined ? {} : { lastError }) })
+        .where(isSending(id))
+        .returning({ id: messages.id });
+      return updated.length > 0;
+    },
+
+    async scheduleRetry(id: string, delayMs: number, lastError: string): Promise<boolean> {
+      const updated = await db
+        .update(messages)
+        .set({
+          status: 'pending',
+          nextAttemptAt: sql`now() + ${delayMs} * interval '1 millisecond'`,
+          lastError,
+          lockedAt: null,
+        })
+        .where(isSending(id))
+        .returning({ id: messages.id });
+      return updated.length > 0;
     },
   };
 }
