@@ -10,6 +10,8 @@ export interface CampaignsRepository {
   findExistingPhones(campaignId: string, phones: string[]): Promise<Set<string>>;
   insertContacts(campaignId: string, contacts: AcceptedContact[]): Promise<void>;
   incrementRejectedContacts(campaignId: string, amount: number): Promise<void>;
+  hasMessages(campaignId: string): Promise<boolean>;
+  markRunning(campaignId: string): Promise<Campaign | undefined>;
 }
 
 export function createCampaignsRepository(db: DatabaseExecutor): CampaignsRepository {
@@ -59,6 +61,24 @@ export function createCampaignsRepository(db: DatabaseExecutor): CampaignsReposi
         .update(campaigns)
         .set({ rejectedContacts: sql`${campaigns.rejectedContacts} + ${amount}` })
         .where(eq(campaigns.id, campaignId));
+    },
+
+    async hasMessages(campaignId: string): Promise<boolean> {
+      const [row] = await db
+        .select({ id: messages.id })
+        .from(messages)
+        .where(eq(messages.campaignId, campaignId))
+        .limit(1);
+      return row !== undefined;
+    },
+
+    async markRunning(campaignId: string): Promise<Campaign | undefined> {
+      const [campaign] = await db
+        .update(campaigns)
+        .set({ status: 'running', startedAt: sql`now()` })
+        .where(and(eq(campaigns.id, campaignId), eq(campaigns.status, 'draft')))
+        .returning();
+      return campaign;
     },
   };
 }

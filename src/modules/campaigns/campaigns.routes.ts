@@ -39,5 +39,14 @@ export function createCampaignsRouter(service: CampaignsService): Router {
     },
   );
 
+  router.post('/:id/start', validate({ params: campaignIdParamsSchema }), async (req, res) => {
+    const campaign = await service.startCampaign(req.params.id as string);
+    res.status(202).json({
+      id: campaign.id,
+      status: campaign.status,
+      started_at: campaign.startedAt?.toISOString() ?? null,
+    });
+  });
+
   return router;
 }

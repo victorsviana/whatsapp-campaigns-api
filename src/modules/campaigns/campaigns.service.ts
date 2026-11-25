@@ -52,5 +52,26 @@ export function createCampaignsService(repository: CampaignsRepository) {
         return { accepted: accepted.length, rejected };
       });
     },
+
+    startCampaign(campaignId: string): Promise<Campaign> {
+      return repository.transaction(async (tx) => {
+        const campaign = await tx.findByIdForUpdate(campaignId);
+        if (!campaign) {
+          throw new AppError(404, 'campaign_not_found', 'Campaign not found');
+        }
+        if (campaign.status !== 'draft') {
+          return campaign;
+        }
+        if (!(await tx.hasMessages(campaignId))) {
+          throw new AppError(409, 'campaign_has_no_contacts', 'Campaign has no contacts to send');
+        }
+
+        const started = await tx.markRunning(campaignId);
+        if (!started) {
+          throw new Error(`Campaign ${campaignId} left draft while locked`);
+        }
+        return started;
+      });
+    },
   };
 }
