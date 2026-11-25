@@ -1,3 +1,4 @@
+import type { CampaignsRepository } from '../modules/campaigns/campaigns.repository';
 import type { MessageProcessor } from '../modules/messages/message.processor';
 import type { ClaimedMessage, MessagesRepository } from '../modules/messages/messages.repository';
 
@@ -5,6 +6,7 @@ export type WorkerLogger = Pick<Console, 'info' | 'error'>;
 
 export type DispatchWorkerOptions = {
   repository: Pick<MessagesRepository, 'recoverStuck' | 'claimBatch'>;
+  campaignsRepository: Pick<CampaignsRepository, 'completeFinished'>;
   processor: MessageProcessor;
   batchSize: number;
   concurrency: number;
@@ -40,7 +42,7 @@ async function runWithConcurrency<T>(
 }
 
 export function createDispatchWorker(options: DispatchWorkerOptions): DispatchWorker {
-  const { repository, processor, logger = console } = options;
+  const { repository, campaignsRepository, processor, logger = console } = options;
 
   let stopping = false;
   let loop: Promise<void> | undefined;
@@ -77,6 +79,11 @@ export function createDispatchWorker(options: DispatchWorkerOptions): DispatchWo
 
     const batch = await repository.claimBatch(options.batchSize);
     await runWithConcurrency(batch, options.concurrency, processSafely);
+
+    const completed = await campaignsRepository.completeFinished();
+    if (completed.length > 0) {
+      logger.info(`Campanha(s) concluída(s): ${completed.join(', ')}`);
+    }
     return batch.length;
   }
 

@@ -1,5 +1,6 @@
 import { closeDatabase, db } from './database/client';
 import { createFakeProviderAdapter } from './integrations/messaging/fake-provider.adapter';
+import { createCampaignsRepository } from './modules/campaigns/campaigns.repository';
 import { createMessageProcessor } from './modules/messages/message.processor';
 import { createMessagesRepository } from './modules/messages/messages.repository';
 import { createRetryPolicy } from './modules/messages/retry-policy';
@@ -20,6 +21,7 @@ const processor = createMessageProcessor({
 
 const worker = createDispatchWorker({
   repository,
+  campaignsRepository: createCampaignsRepository(db),
   processor,
   batchSize: env.WORKER_BATCH_SIZE,
   concurrency: env.WORKER_CONCURRENCY,

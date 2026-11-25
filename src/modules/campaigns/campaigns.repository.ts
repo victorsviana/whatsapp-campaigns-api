@@ -1,4 +1,4 @@
-import { and, eq, inArray, sql } from 'drizzle-orm';
+import { and, eq, inArray, notExists, sql } from 'drizzle-orm';
 import type { DatabaseExecutor } from '../../database/client';
 import { type Campaign, campaigns, messages, type NewCampaign } from '../../database/schema';
 import type { AcceptedContact } from './contact-validator';
@@ -12,6 +12,7 @@ export interface CampaignsRepository {
   incrementRejectedContacts(campaignId: string, amount: number): Promise<void>;
   hasMessages(campaignId: string): Promise<boolean>;
   markRunning(campaignId: string): Promise<Campaign | undefined>;
+  completeFinished(): Promise<string[]>;
 }
 
 export function createCampaignsRepository(db: DatabaseExecutor): CampaignsRepository {
@@ -79,6 +80,20 @@ export function createCampaignsRepository(db: DatabaseExecutor): CampaignsReposi
         .where(and(eq(campaigns.id, campaignId), eq(campaigns.status, 'draft')))
         .returning();
       return campaign;
+    },
+
+    async completeFinished(): Promise<string[]> {
+      const openMessages = db
+        .select({ id: messages.id })
+        .from(messages)
+        .where(and(eq(messages.campaignId, campaigns.id), inArray(messages.status, ['pending', 'sending'])));
+
+      const completed = await db
+        .update(campaigns)
+        .set({ status: 'completed', completedAt: sql`now()` })
+        .where(and(eq(campaigns.status, 'running'), notExists(openMessages)))
+        .returning({ id: campaigns.id });
+      return completed.map((campaign) => campaign.id);
     },
   };
 }

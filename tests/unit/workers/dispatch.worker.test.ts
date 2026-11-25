@@ -36,10 +36,12 @@ function setup(overrides: Partial<DispatchWorkerOptions> = {}) {
     recoverStuck: vi.fn(async () => 0),
     claimBatch: vi.fn(async (): Promise<ClaimedMessage[]> => []),
   };
+  const campaignsRepository = { completeFinished: vi.fn(async (): Promise<string[]> => []) };
   const processor = { process: vi.fn(async (message: ClaimedMessage) => sent(message)) } satisfies MessageProcessor;
   const logger = { info: vi.fn(), error: vi.fn() };
   const worker = createDispatchWorker({
     repository,
+    campaignsRepository,
     processor,
     logger,
     batchSize: 50,
@@ -49,7 +51,7 @@ function setup(overrides: Partial<DispatchWorkerOptions> = {}) {
     maxAttempts: 5,
     ...overrides,
   });
-  return { worker, repository, processor, logger };
+  return { worker, repository, campaignsRepository, processor, logger };
 }
 
 describe('dispatchWorker.runOnce', () => {
@@ -91,6 +93,33 @@ describe('dispatchWorker.runOnce', () => {
 
     expect(processor.process).toHaveBeenCalledTimes(8);
     expect(peak).toBe(3);
+  });
+
+  it('R13: fecha as campanhas terminadas depois de gravar os resultados do lote', async () => {
+    const { worker, repository, campaignsRepository, processor, logger } = setup();
+    const order: string[] = [];
+    repository.claimBatch.mockResolvedValue([claimed('m1')]);
+    processor.process.mockImplementation(async (message) => {
+      order.push('process');
+      return sent(message);
+    });
+    campaignsRepository.completeFinished.mockImplementation(async () => {
+      order.push('complete');
+      return ['c1'];
+    });
+
+    await worker.runOnce();
+
+    expect(order).toEqual(['process', 'complete']);
+    expect(logger.info).toHaveBeenCalledWith(expect.stringContaining('c1'));
+  });
+
+  it('R13: fecha campanhas mesmo quando o lote veio vazio', async () => {
+    const { worker, campaignsRepository } = setup();
+
+    await expect(worker.runOnce()).resolves.toBe(0);
+
+    expect(campaignsRepository.completeFinished).toHaveBeenCalledTimes(1);
   });
 
   it('uma mensagem que lança erro não impede as outras do lote', async () => {
