@@ -131,8 +131,222 @@ Todo erro sai no mesmo formato: `{ "error": { "code", "message", "details"? } }`
 
 ## 3. Como rodar o projeto e os testes
 
-> _Em construção — `docker compose up`, execução dos testes e exemplos de chamadas._
+### Subir tudo
+
+Precisa só de Docker com o Compose.
+
+```bash
+docker compose up --build
+```
+
+O comando sobe quatro serviços:
+
+| Serviço | O que faz |
+|---|---|
+| `postgres` | Banco, exposto em `localhost:5432` (usuário e senha `postgres`, banco `wpp_campaigns`). |
+| `migrate` | Aplica as migrations e termina. A API e o worker só sobem depois dele. |
+| `api` | A API em `http://localhost:3000` (`GET /health` responde `{"status":"ok"}`). |
+| `worker` | Envia as mensagens pelo `fakeProvider.js`. |
+
+Para mudar a taxa de falha passageira do provedor simulado (padrão 20%): `FAKE_FAIL_RATE=0.5 docker compose up`. As demais configurações do worker estão em [`.env.example`](.env.example) e na [spec 02](specs/02-envio.md#configuração).
+
+Para zerar o banco: `docker compose down -v`.
+
+### Rodar os testes
+
+Os testes de integração usam um Postgres de verdade. Eles criam sozinhos o banco `wpp_campaigns_test`, aplicam as migrations e limpam as tabelas no início de cada execução. Precisa de Node 18+ (o projeto usa Node 24 na imagem).
+
+```bash
+docker compose up -d postgres   # só o banco, se a stack não estiver de pé
+npm ci
+npm test                        # unitários, integração e ponta a ponta (~30 s)
+npm run typecheck
+npm run check:criteria          # lista critério das specs sem teste (esperado: 80/80)
+```
+
+Para usar outro Postgres, defina `TEST_DATABASE_URL`. O nome do banco precisa terminar em `_test`, porque o setup apaga os dados dele.
+
+### Rodar fora do Docker (desenvolvimento)
+
+```bash
+cp .env.example .env
+docker compose up -d postgres
+npm run db:migrate
+npm run dev           # API com reload
+npm run dev:worker    # worker, em outro terminal
+```
+
+### Exemplos de chamadas
+
+O roteiro abaixo percorre o fluxo inteiro. As respostas são de uma execução real; ids e datas mudam a cada vez. O `jq` só serve para guardar os ids em variáveis; sem ele, copie o id da resposta.
+
+**1. Criar a campanha.** As variáveis são extraídas do template.
+
+```bash
+ID=$(curl -s -X POST localhost:3000/campaigns \
+  -H 'Content-Type: application/json' \
+  -d '{"name": "Entrega novembro", "template": "Olá {{nome}}, seu pedido {{pedido}} saiu para entrega."}' \
+  | tee /dev/stderr | jq -r .id)
+```
+
+```json
+{"id":"fb84ecfd-...","name":"Entrega novembro","template":"Olá {{nome}}, seu pedido {{pedido}} saiu para entrega.","variables":["nome","pedido"],"status":"draft","created_at":"2026-11-25T01:25:39.273Z"}
+```
+
+**2. Cadastrar contatos, com os problemas típicos de planilha.** O lote não é recusado: os válidos entram e os inválidos voltam com a posição e o motivo.
+
+```bash
+curl -s -X POST localhost:3000/campaigns/$ID/contacts \
+  -H 'Content-Type: application/json' \
+  -d '{"contacts": [
+    {"phone": "(11) 98765-4321",   "variables": {"nome": "Ana",  "pedido": "A-100"}},
+    {"phone": "11 98765-4321",     "variables": {"nome": "Ana",  "pedido": "A-100"}},
+    {"phone": "123",               "variables": {"nome": "Bia",  "pedido": "B-200"}},
+    {"phone": "21987650000",       "variables": {"nome": "Caio", "pedido": "C-300"}},
+    {"phone": "21987654322",       "variables": {"nome": "Duda"}},
+    {                              "variables": {"nome": "Edu",  "pedido": "E-500"}},
+    {"phone": "+55 31 99876-5432", "variables": {"nome": "Fê",   "pedido": 1234}}
+  ]}'
+```
+
+```json
+{
+  "accepted": 3,
+  "rejected": [
+    { "index": 1, "phone": "11 98765-4321", "reason": "duplicate_phone" },
+    { "index": 2, "phone": "123", "reason": "invalid_phone" },
+    { "index": 4, "phone": "21987654322", "reason": "missing_variables", "missing": ["pedido"] },
+    { "index": 5, "phone": null, "reason": "missing_phone" }
+  ]
+}
+```
+
+O `21987650000` é aceito no cadastro, porque o formato é válido, mas o provedor simulado recusa números terminados em `0000` com `400 invalid_number` no envio.
+
+**3. Iniciar o envio.** Responde na hora; chamar de novo devolve o estado atual, sem erro.
+
+```bash
+curl -s -X POST localhost:3000/campaigns/$ID/start
+```
+
+```json
+{"id":"fb84ecfd-...","status":"running","started_at":"2026-11-25T01:25:41.675Z"}
+```
+
+Depois do `start`, a campanha não aceita mais contatos (`409 campaign_not_draft`).
+
+**4. Acompanhar o andamento.** Repita até `status` virar `completed`. Com a taxa de falha padrão, algumas mensagens podem passar por retry antes (`retrying > 0`).
+
+```bash
+curl -s localhost:3000/campaigns/$ID
+```
+
+```json
+{
+  "id": "fb84ecfd-...",
+  "status": "completed",
+  "started_at": "2026-11-25T01:25:41.675Z",
+  "completed_at": "2026-11-25T01:25:42.296Z",
+  "contacts": { "accepted": 3, "rejected": 4 },
+  "messages": {
+    "by_status": { "pending": 0, "sending": 0, "sent": 2, "delivered": 0, "read": 0, "failed": 1 },
+    "funnel": { "sent": 2, "delivered": 0, "read": 0, "failed": 1 },
+    "retrying": 0,
+    "failures_by_reason": { "invalid_number": 1 }
+  }
+}
+```
+
+(campos `name`, `template`, `variables` e `created_at` omitidos aqui)
+
+**5. Ver o motivo de cada falha.** A lista aceita `?status=`, `?limit=` (até 500) e `?offset=`.
+
+```bash
+curl -s "localhost:3000/campaigns/$ID/messages?status=failed"
+```
+
+```json
+{
+  "total": 1, "limit": 50, "offset": 0,
+  "items": [
+    { "phone": "+5521987650000", "status": "failed", "attempts": 1,
+      "failure_reason": "invalid_number", "last_error": null, "provider_message_id": null, "...": "..." }
+  ]
+}
+```
+
+**6. Simular os webhooks do provedor, repetidos e fora de ordem.** Pegue o `provider_message_id` de uma mensagem enviada:
+
+```bash
+PM=$(curl -s "localhost:3000/campaigns/$ID/messages?status=sent" | jq -r '.items[0].provider_message_id')
+
+webhook() {
+  curl -s -X POST localhost:3000/webhooks/provider \
+    -H 'Content-Type: application/json' \
+    -d "{\"event_id\": \"$1\", \"provider_message_id\": \"$2\", \"status\": \"$3\"}"
+  echo
+}
+
+webhook evt_001 $PM read           # {"event_id":"evt_001","result":"applied"}    sent → read
+webhook evt_002 $PM delivered      # {"event_id":"evt_002","result":"ignored"}    chegou depois do read
+webhook evt_001 $PM read           # {"event_id":"evt_001","result":"duplicate"}  mesmo event_id
+webhook evt_003 $PM failed         # {"event_id":"evt_003","result":"ignored"}    read é final
+webhook evt_004 pm_nao_existe read # {"event_id":"evt_004","result":"pending"}    mensagem ainda não conhecida
+```
+
+Os `event_id` precisam ser novos a cada execução do roteiro; repetidos de uma execução anterior voltam `duplicate`.
+
+No relatório, a mensagem conta como lida e também como entregue no funil, e nada regrediu:
+
+```json
+"by_status": { "pending": 0, "sending": 0, "sent": 1, "delivered": 0, "read": 1, "failed": 1 },
+"funnel":    { "sent": 2, "delivered": 1, "read": 1, "failed": 1 }
+```
+
+**Erros de validação** listam todos os campos com problema:
+
+```bash
+curl -s -X POST localhost:3000/campaigns -H 'Content-Type: application/json' -d '{"template": ""}'
+```
+
+```json
+{"error":{"code":"validation_error","message":"Invalid request","details":[
+  {"path":"body.name","message":"Invalid input: expected string, received undefined"},
+  {"path":"body.template","message":"Template must not be empty"}]}}
+```
 
 ## 4. O que ficou de fora e próximos passos
 
-> _Em construção — o que eu faria com mais tempo ou em produção._
+### Fora do escopo, de propósito
+
+- **Autenticação e multiempresa.** Em produção, cada requisição teria uma chave de API ou token, e as campanhas pertenceriam a uma conta.
+- **Assinatura do webhook.** Hoje qualquer um pode chamar `POST /webhooks/provider`. Um provedor real assina o aviso (ex.: HMAC num header) e a rota validaria a assinatura antes de tudo.
+- **Pausar, cancelar e editar campanhas**, e remover contatos. O desenho comporta: pausar seria um estado `paused` que o worker já ignoraria, porque só reserva mensagens de campanha `running`.
+- **Listagem de campanhas** (`GET /campaigns`). O enunciado pede o acompanhamento de uma campanha.
+- **Upload direto de CSV/planilha.** A API recebe JSON em lotes de até 10.000 contatos; a leitura da planilha fica com o cliente.
+- **Telefones de outros países.** A validação assume Brasil.
+
+### Com mais tempo ou em produção
+
+**Envio**
+- **Rate limit do provedor.** Hoje só há limite de concorrência. Um provedor real limita envios por segundo e responde `429`, que precisaria ser tratado como passageiro (hoje todo 4xx é definitivo) e respeitar o `Retry-After`.
+- **Divisão justa entre campanhas.** A fila é FIFO: uma campanha de 100 mil contatos atrasa uma pequena que começou depois. Daria para reservar em rodízio por campanha.
+- **Reduzir o reenvio duplicado.** Com um provedor que aceite chave de idempotência, mandar o id da mensagem como chave tornaria o reenvio após queda do worker inofensivo.
+- **Janela de horário.** Não disparar campanha de madrugada, agendar o início.
+
+**Webhooks**
+- **Limpeza de eventos pendentes** cujo `provider_message_id` nunca apareceu, e retenção da tabela `provider_events`, que cresce com cada aviso.
+- **Responder ao provedor antes de processar** (gravar o evento e processar de forma assíncrona) se o volume de avisos crescer muito.
+
+**Relatório e escala**
+- **Contadores mantidos por evento** em vez de `COUNT` a cada consulta, para campanhas de milhões de mensagens.
+- **Paginação por cursor** (`seq`) na lista de mensagens, que é mais eficiente que `offset` em páginas distantes.
+- **Avisar a empresa quando a campanha terminar** (webhook de saída), em vez de ela ficar consultando.
+- **Particionar ou arquivar** mensagens de campanhas antigas.
+
+**Operação**
+- **Logs estruturados** (JSON com id da campanha e da mensagem) e **métricas**: tamanho da fila, taxa de falha por motivo, tempo até o envio, tentativas. E alertas, por exemplo fila parada ou taxa de falha alta.
+- **Healthcheck do worker** (hoje só a API tem) e **readiness** checando o banco.
+- **CI** rodando typecheck, testes e `check:criteria` em cada push, e lint/format automáticos.
+- **Documentação da API em OpenAPI**, gerada a partir dos schemas Zod.
+- **Pool de conexões e índices** revisados com carga real; teste de carga com campanhas de 100 mil contatos.
