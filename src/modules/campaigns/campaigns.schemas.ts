@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { MESSAGE_STATUSES } from '../../database/schema';
 
 export const CAMPAIGN_NAME_MAX_LENGTH = 200;
 export const TEMPLATE_MAX_LENGTH = 4096;
@@ -24,3 +25,14 @@ export const addContactsBodySchema = z.object({
 });
 
 export type AddContactsInput = z.infer<typeof addContactsBodySchema>;
+
+export const MESSAGES_PAGE_DEFAULT = 50;
+export const MESSAGES_PAGE_MAX = 500;
+
+export const listMessagesQuerySchema = z.object({
+  status: z.enum(MESSAGE_STATUSES).optional(),
+  limit: z.coerce.number().int().min(1).max(MESSAGES_PAGE_MAX).default(MESSAGES_PAGE_DEFAULT),
+  offset: z.coerce.number().int().min(0).default(0),
+});
+
+export type ListMessagesQuery = z.infer<typeof listMessagesQuerySchema>;

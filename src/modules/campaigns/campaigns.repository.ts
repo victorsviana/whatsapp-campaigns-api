@@ -1,7 +1,10 @@
 import { and, count, eq, inArray, notExists, sql } from 'drizzle-orm';
 import type { DatabaseExecutor } from '../../database/client';
-import { type Campaign, campaigns, messages, type NewCampaign } from '../../database/schema';
+import { type Campaign, campaigns, type Message, messages, type NewCampaign } from '../../database/schema';
 import type { FailureReasonCount, StatusCount } from './campaign-report';
+import type { ListMessagesQuery } from './campaigns.schemas';
+
+const READ_ONLY_SNAPSHOT = { isolationLevel: 'repeatable read', accessMode: 'read only' } as const;
 import type { AcceptedContact } from './contact-validator';
 
 export interface CampaignsRepository {
@@ -15,7 +18,13 @@ export interface CampaignsRepository {
   markRunning(campaignId: string): Promise<Campaign | undefined>;
   completeFinished(): Promise<string[]>;
   findReport(campaignId: string): Promise<CampaignReportData | undefined>;
+  listMessages(campaignId: string, query: ListMessagesQuery): Promise<MessagesPage | undefined>;
 }
+
+export type MessagesPage = {
+  total: number;
+  items: Message[];
+};
 
 export type CampaignReportData = {
   campaign: Campaign;
@@ -131,8 +140,32 @@ export function createCampaignsRepository(db: DatabaseExecutor): CampaignsReposi
 
           return { campaign, statusCounts, failureCounts };
         },
-        { isolationLevel: 'repeatable read', accessMode: 'read only' },
+        READ_ONLY_SNAPSHOT,
       );
+    },
+
+    listMessages(campaignId: string, query: ListMessagesQuery): Promise<MessagesPage | undefined> {
+      return db.transaction(async (tx) => {
+        const [campaign] = await tx.select({ id: campaigns.id }).from(campaigns).where(eq(campaigns.id, campaignId));
+        if (!campaign) {
+          return undefined;
+        }
+
+        const filter = and(
+          eq(messages.campaignId, campaignId),
+          query.status === undefined ? undefined : eq(messages.status, query.status),
+        );
+        const [counted] = await tx.select({ total: count() }).from(messages).where(filter);
+        const items = await tx
+          .select()
+          .from(messages)
+          .where(filter)
+          .orderBy(messages.seq)
+          .limit(query.limit)
+          .offset(query.offset);
+
+        return { total: counted?.total ?? 0, items };
+      }, READ_ONLY_SNAPSHOT);
     },
   };
 }

@@ -1,8 +1,8 @@
 import type { Campaign } from '../../database/schema';
 import { AppError } from '../../shared/errors/app-error';
 import { buildMessagesSummary, type MessagesSummary } from './campaign-report';
-import type { CampaignsRepository } from './campaigns.repository';
-import type { CreateCampaignInput } from './campaigns.schemas';
+import type { CampaignsRepository, MessagesPage } from './campaigns.repository';
+import type { CreateCampaignInput, ListMessagesQuery } from './campaigns.schemas';
 import { type ContactInput, normalizePhone, type RejectedContact, validateContacts } from './contact-validator';
 import { extractVariables } from './template';
 
@@ -70,6 +70,14 @@ export function createCampaignsService(repository: CampaignsRepository) {
         acceptedContacts: data.statusCounts.reduce((total, row) => total + row.total, 0),
         messages: buildMessagesSummary(data.statusCounts, data.failureCounts),
       };
+    },
+
+    async listMessages(campaignId: string, query: ListMessagesQuery): Promise<MessagesPage> {
+      const page = await repository.listMessages(campaignId, query);
+      if (!page) {
+        throw new AppError(404, 'campaign_not_found', 'Campaign not found');
+      }
+      return page;
     },
 
     startCampaign(campaignId: string): Promise<Campaign> {
