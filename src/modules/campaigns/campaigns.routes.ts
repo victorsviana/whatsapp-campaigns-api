@@ -29,6 +29,17 @@ export function createCampaignsRouter(service: CampaignsService): Router {
     res.status(201).json(toCampaignResponse(campaign));
   });
 
+  router.get('/:id', validate({ params: campaignIdParamsSchema }), async (req, res) => {
+    const report = await service.getReport(req.params.id as string);
+    res.status(200).json({
+      ...toCampaignResponse(report.campaign),
+      started_at: report.campaign.startedAt?.toISOString() ?? null,
+      completed_at: report.campaign.completedAt?.toISOString() ?? null,
+      contacts: { accepted: report.acceptedContacts, rejected: report.campaign.rejectedContacts },
+      messages: report.messages,
+    });
+  });
+
   router.post(
     '/:id/contacts',
     validate({ params: campaignIdParamsSchema, body: addContactsBodySchema }),

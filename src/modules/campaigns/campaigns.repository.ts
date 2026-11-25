@@ -1,6 +1,7 @@
-import { and, eq, inArray, notExists, sql } from 'drizzle-orm';
+import { and, count, eq, inArray, notExists, sql } from 'drizzle-orm';
 import type { DatabaseExecutor } from '../../database/client';
 import { type Campaign, campaigns, messages, type NewCampaign } from '../../database/schema';
+import type { FailureReasonCount, StatusCount } from './campaign-report';
 import type { AcceptedContact } from './contact-validator';
 
 export interface CampaignsRepository {
@@ -13,7 +14,14 @@ export interface CampaignsRepository {
   hasMessages(campaignId: string): Promise<boolean>;
   markRunning(campaignId: string): Promise<Campaign | undefined>;
   completeFinished(): Promise<string[]>;
+  findReport(campaignId: string): Promise<CampaignReportData | undefined>;
 }
+
+export type CampaignReportData = {
+  campaign: Campaign;
+  statusCounts: StatusCount[];
+  failureCounts: FailureReasonCount[];
+};
 
 export function createCampaignsRepository(db: DatabaseExecutor): CampaignsRepository {
   return {
@@ -94,6 +102,37 @@ export function createCampaignsRepository(db: DatabaseExecutor): CampaignsReposi
         .where(and(eq(campaigns.status, 'running'), notExists(openMessages)))
         .returning({ id: campaigns.id });
       return completed.map((campaign) => campaign.id);
+    },
+
+    findReport(campaignId: string): Promise<CampaignReportData | undefined> {
+      return db.transaction(
+        async (tx) => {
+          const [campaign] = await tx.select().from(campaigns).where(eq(campaigns.id, campaignId));
+          if (!campaign) {
+            return undefined;
+          }
+
+          const statusCounts = await tx
+            .select({
+              status: messages.status,
+              total: count(),
+              withProviderId: count(messages.providerMessageId),
+              retrying: sql<number>`count(*) filter (where ${messages.attempts} > 0)`.mapWith(Number),
+            })
+            .from(messages)
+            .where(eq(messages.campaignId, campaignId))
+            .groupBy(messages.status);
+
+          const failureCounts = await tx
+            .select({ reason: messages.failureReason, total: count() })
+            .from(messages)
+            .where(and(eq(messages.campaignId, campaignId), eq(messages.status, 'failed')))
+            .groupBy(messages.failureReason);
+
+          return { campaign, statusCounts, failureCounts };
+        },
+        { isolationLevel: 'repeatable read', accessMode: 'read only' },
+      );
     },
   };
 }
