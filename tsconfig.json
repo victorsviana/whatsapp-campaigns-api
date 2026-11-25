@@ -20,5 +20,5 @@
 
     "noEmit": true
   },
-  "include": ["src", "tests", "*.config.ts", "*.config.mts"]
+  "include": ["src", "tests", "scripts", "*.config.ts", "*.config.mts"]
 }

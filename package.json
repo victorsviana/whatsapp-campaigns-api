@@ -18,7 +18,8 @@
     "db:migrate": "tsx src/database/migrate.ts",
     "start:migrate": "node dist/database/migrate.js",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "check:criteria": "tsx scripts/check-criteria.ts"
   },
   "devDependencies": {
     "@types/express": "^5.0.6",

@@ -19,6 +19,21 @@ async function createDatabaseIfMissing(databaseUrl: string): Promise<void> {
   }
 }
 
+async function truncateTables(databaseUrl: string): Promise<void> {
+  const databaseName = new URL(databaseUrl).pathname.slice(1);
+  if (!databaseName.endsWith('_test')) {
+    throw new Error(`Recusando limpar o banco "${databaseName}": o nome do banco de teste precisa terminar em _test`);
+  }
+
+  const client = new Client({ connectionString: databaseUrl });
+  await client.connect();
+  try {
+    await client.query('TRUNCATE TABLE provider_events, messages, campaigns RESTART IDENTITY');
+  } finally {
+    await client.end();
+  }
+}
+
 export default async function setup(project: TestProject): Promise<void> {
   const databaseUrl = project.config.env.DATABASE_URL;
   if (!databaseUrl) {
@@ -27,4 +42,5 @@ export default async function setup(project: TestProject): Promise<void> {
 
   await createDatabaseIfMissing(databaseUrl);
   await runMigrations(databaseUrl);
+  await truncateTables(databaseUrl);
 }
